@@ -6,11 +6,16 @@ import pandas as pd
 # Configuración de Página
 st.set_page_config(page_title="InDrive Contabilidad", page_icon="🏍️", layout="centered")
 
-# Diccionario de Meses en Español
+# Diccionario de Meses y Días en Español
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
     9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+}
+
+DIAS_SEMANA = {
+    0: "Lunes", 1: "Martes", 2: "Miércoles", 3: "Jueves",
+    4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
 # Conexión a Supabase
@@ -39,14 +44,14 @@ def actualizar_acumuladores_automatico(monto_neto_cambio):
             nuevo_saldo = float(f["saldo"]) + incremento
             supabase.table("acumuladores").update({"saldo": nuevo_saldo}).eq("id", f["id"]).execute()
 
-# Diálogo de Confirmación para Poner Fondo en 0
-@st.dialog("Confirmar Reinicio de Fondo")
-def confirmar_poner_cero(fondo_id, fondo_nombre):
-    st.write(f"¿En verdad quieres poner el fondo **{fondo_nombre}** en C$ 0.00?")
+# Diálogo de Confirmación para Retirar Fondo (Poner en 0)
+@st.dialog("Confirmar Retiro de Fondo")
+def confirmar_retirar_fondo(fondo_id, fondo_nombre):
+    st.write(f"¿En verdad quieres retirar y poner el fondo **{fondo_nombre}** en C$ 0.00?")
     c_si, c_no = st.columns(2)
-    if c_si.button("Sí, Confirmar", key=f"yes_{fondo_id}"):
+    if c_si.button("Sí, Retirar", key=f"yes_{fondo_id}"):
         supabase.table("acumuladores").update({"saldo": 0.00}).eq("id", fondo_id).execute()
-        st.success(f"El fondo **{fondo_nombre}** ha sido reajustado a C$ 0.00")
+        st.success(f"El fondo **{fondo_nombre}** se ha puesto en C$ 0.00")
         st.rerun()
     if c_no.button("No, Cancelar", key=f"no_{fondo_id}"):
         st.rerun()
@@ -72,7 +77,7 @@ with tab1:
     st.info("💡 Fondo De Caja Chica: **C$ 200.00** (Exclusivo Para Cambio A Pasajeros, No Genera Ingreso Ni Gasto).")
 
     # Obtener Siguiente Número De Viaje Automático Para La Fecha
-    res_v_dia = supabase.table("viajes").select("numero_viaje").eq("fecha", str(fecha_seleccionada)).execute()
+    res_v_dia = supabase.table("viajes").select("*").eq("fecha", str(fecha_seleccionada)).order("numero_viaje").execute()
     viajes_existentes = [v["numero_viaje"] for v in res_v_dia.data] if res_v_dia.data else []
     siguiente_numero_viaje = max(viajes_existentes, default=0) + 1
 
@@ -129,18 +134,37 @@ with tab1:
     col_v, col_g = st.columns(2)
     with col_v:
         st.write("**Viajes Del Día**")
-        df_v_hoy = pd.DataFrame(res_v_dia.data)
-        if not df_v_hoy.empty:
-            st.dataframe(df_v_hoy, use_container_width=True)
+        if res_v_dia.data:
+            df_v_hoy = pd.DataFrame(res_v_dia.data)
+            df_v_hoy["Monto (C$)"] = df_v_hoy["monto"].astype(float)
+            df_v_hoy["Propina (C$)"] = df_v_hoy["propina"].astype(float)
+            df_v_hoy["Total Viaje (C$)"] = df_v_hoy["Monto (C$)"] + df_v_hoy["Propina (C$)"]
+            df_v_hoy["Viaje"] = df_v_hoy["numero_viaje"].apply(lambda x: f"Viaje #{x}")
+            
+            tabla_viajes_mostrar = df_v_hoy[["Viaje", "Monto (C$)", "Propina (C$)", "Total Viaje (C$)"]]
+            st.dataframe(tabla_viajes_mostrar, use_container_width=True, hide_index=True)
+            
+            total_colectado_dia = df_v_hoy["Total Viaje (C$)"].sum()
+            cantidad_viajes = len(df_v_hoy)
+            st.markdown(f"**Total Viajes Realizados:** `{cantidad_viajes}`")
+            st.markdown(f"**Total Ingresado Hoy:** `C$ {total_colectado_dia:.2f}`")
         else:
             st.caption("No Hay Viajes Registrados Hoy.")
             
     with col_g:
         st.write("**Gastos Del Día**")
-        res_g_dia = supabase.table("gastos").select("categoria, monto, descripcion").eq("fecha", str(fecha_seleccionada)).execute()
-        df_g_hoy = pd.DataFrame(res_g_dia.data)
-        if not df_g_hoy.empty:
-            st.dataframe(df_g_hoy, use_container_width=True)
+        res_g_dia = supabase.table("gastos").select("*").eq("fecha", str(fecha_seleccionada)).execute()
+        if res_g_dia.data:
+            df_g_hoy = pd.DataFrame(res_g_dia.data)
+            df_g_hoy["Monto (C$)"] = df_g_hoy["monto"].astype(float)
+            df_g_hoy["Categoría"] = df_g_hoy["categoria"]
+            df_g_hoy["Descripción"] = df_g_hoy["descripcion"]
+            
+            tabla_gastos_mostrar = df_g_hoy[["Categoría", "Monto (C$)", "Descripción"]]
+            st.dataframe(tabla_gastos_mostrar, use_container_width=True, hide_index=True)
+            
+            total_gastos_dia = df_g_hoy["Monto (C$)"].sum()
+            st.markdown(f"**Total Gastos Hoy:** `C$ {total_gastos_dia:.2f}`")
         else:
             st.caption("No Hay Gastos Registrados Hoy.")
 
@@ -173,7 +197,51 @@ with tab2:
     m2.metric("Gastos Operativos De Esta Semana", f"C$ {gastos_semana:.2f}")
     m3.metric("Ganancia Neta De Esta Semana", f"C$ {ganancia_semana:.2f}")
 
-    st.info("⚡ La Distribución De La Ganancia Neta Se Realiza De Forma Automática En Cada Registro.")
+    st.divider()
+    st.subheader("📅 Desglose Diario De La Semana")
+    
+    # Construcción De La Tabla Día Por Día De La Semana Actual
+    dias_semana_lista = []
+    fecha_iter = inicio_sem
+    
+    res_v_todos = supabase.table("viajes").select("fecha, monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
+    res_g_todos = supabase.table("gastos").select("fecha, monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
+    
+    df_v_todos = pd.DataFrame(res_v_todos.data) if res_v_todos.data else pd.DataFrame()
+    df_g_todos = pd.DataFrame(res_g_todos.data) if res_g_todos.data else pd.DataFrame()
+
+    while fecha_iter <= fin_sem:
+        f_str = str(fecha_iter)
+        
+        # Calcular Ingreso del Día
+        ing_dia = 0.0
+        if not df_v_todos.empty:
+            sub_v = df_v_todos[df_v_todos["fecha"] == f_str]
+            if not sub_v.empty:
+                ing_dia = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
+
+        # Calcular Gasto del Día
+        gas_dia = 0.0
+        if not df_g_todos.empty:
+            sub_g = df_g_todos[df_g_todos["fecha"] == f_str]
+            if not sub_g.empty:
+                gas_dia = float(sub_g["monto"].astype(float).sum())
+
+        neto_dia = ing_dia - gas_dia
+        
+        nombre_dia = DIAS_SEMANA[fecha_iter.weekday()]
+        fecha_formateada = f"{nombre_dia} {fecha_iter.day} De {MESES[fecha_iter.month]}"
+        
+        dias_semana_lista.append({
+            "Fecha": fecha_formateada,
+            "Ingresos (C$)": f"C$ {ing_dia:.2f}",
+            "Gastos Operativos (C$)": f"C$ {gas_dia:.2f}",
+            "Ganancia Neta (C$)": f"C$ {neto_dia:.2f}"
+        })
+        fecha_iter += datetime.timedelta(days=1)
+
+    df_dias_semana = pd.DataFrame(dias_semana_lista)
+    st.table(df_dias_semana)
 
 # ------------------------------------------------------------------------------
 # PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS
@@ -187,17 +255,41 @@ with tab3:
     str_fin = f"{fin_sem.day} De {MESES[fin_sem.month]}"
     
     st.caption(f"Colectado Hasta El Momento Esta Semana ({str_inicio} Al {str_fin})")
+
+    # Calcular Ganancia Neta de Hoy para calcular el apartado diario
+    res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
+    res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
     
+    ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
+    gas_hoy = sum([float(g["monto"]) for g in res_g_hoy.data]) if res_g_hoy.data else 0.0
+    ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
+
+    st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
+
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
     
+    # Encabezados de Tabla de Distribución
+    st.subheader("Tabla De Distribución De Fondos")
+    
+    col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
+    col_h1.write("**Fondo (% Porcentaje)**")
+    col_h2.write("**Aporte Hoy (C$)**")
+    col_h3.write("**Total Acumulado (C$)**")
+    col_h4.write("**Acción**")
+    st.divider()
+
     for f in fondos:
-        col_f1, col_f2, col_f3 = st.columns([4, 3, 2])
-        col_f1.markdown(f"**{f['nombre']}** ({f['porcentaje']}%)")
-        col_f2.markdown(f"**C$ {float(f['saldo']):.2f}**")
+        col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
+        pct = float(f["porcentaje"])
+        aporte_hoy = ganancia_hoy * (pct / 100.0)
         
-        if col_f3.button("Poner En 0", key=f"btn_cero_{f['id']}"):
-            confirmar_poner_cero(f["id"], f["nombre"])
+        col_f1.write(f"**{f['nombre']}** ({pct:.0f}%)")
+        col_f2.write(f"C$ {aporte_hoy:.2f}")
+        col_f3.write(f"**C$ {float(f['saldo']):.2f}**")
+        
+        if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
+            confirmar_retirar_fondo(f["id"], f["nombre"])
 
 # ------------------------------------------------------------------------------
 # PESTAÑA 4: REPORTES
@@ -231,7 +323,7 @@ with tab4:
 
     res_g_rep = supabase.table("gastos").select("monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_g_r = pd.DataFrame(res_g_rep.data)
-    gas_rep = float(df_g_r["monto"].sum()) if not df_g_r.empty else 0.0
+    gas_rep = float(df_g_r["monto"].sum()) if not df_g_rep.empty else 0.0
 
     gan_rep = ing_rep - gas_rep
 
