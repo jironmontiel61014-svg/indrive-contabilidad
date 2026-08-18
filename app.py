@@ -27,15 +27,13 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Función Auxiliar para Calcular Rango Semanal (Domingo a Sábado)
+# Función Auxiliar para Calcular Rango Semanal (Lunes a Domingo)
 def obtener_rango_semanal(fecha_ref):
-    # En Python: Monday=0, Sunday=6. Para que el inicio sea Domingo:
-    idx = (fecha_ref.weekday() + 1) % 7
-    inicio = fecha_ref - datetime.timedelta(days=idx)
-    fin = inicio + datetime.timedelta(days=6)
+    inicio = fecha_ref - datetime.timedelta(days=fecha_ref.weekday())  # Lunes
+    fin = inicio + datetime.timedelta(days=6)                            # Domingo
     return inicio, fin
 
-# Función para Actualizar Acumuladores Automáticamente
+# Función para Actualizar Acumuladores Automáticamente en Supabase
 def actualizar_acumuladores_automatico(monto_neto_cambio):
     if monto_neto_cambio != 0:
         res_fondos = supabase.table("acumuladores").select("*").execute()
@@ -57,7 +55,7 @@ def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     if c_no.button("No, Cancelar", key=f"no_{fondo_id}"):
         st.rerun()
 
-# Título Principal de la Aplicación
+# Título Principal
 st.title("🏍️ InDrive Contabilidad")
 
 # Navegación Superior por Pestañas
@@ -77,7 +75,6 @@ with tab1:
     
     st.info("💡 Fondo De Caja Chica: **C$ 200.00** (Exclusivo Para Cambio A Pasajeros, No Genera Ingreso Ni Gasto).")
 
-    # Obtener Siguiente Número De Viaje Automático Para La Fecha
     res_v_dia = supabase.table("viajes").select("*").eq("fecha", str(fecha_seleccionada)).order("numero_viaje").execute()
     viajes_existentes = [v["numero_viaje"] for v in res_v_dia.data] if res_v_dia.data else []
     siguiente_numero_viaje = max(viajes_existentes, default=0) + 1
@@ -100,7 +97,6 @@ with tab1:
                     "propina": propina
                 }).execute()
                 
-                # Distribución Automática Inmediata En Fondos
                 ganancia_viaje = monto_viaje + propina
                 actualizar_acumuladores_automatico(ganancia_viaje)
                 
@@ -123,7 +119,6 @@ with tab1:
                     "descripcion": descripcion
                 }).execute()
                 
-                # Descuento Automático En Fondos
                 actualizar_acumuladores_automatico(-monto_gasto)
                 
                 st.success("Gasto Registrado Y Descontado Correctamente.")
@@ -132,7 +127,7 @@ with tab1:
     st.divider()
     st.subheader(f"Detalle De Hoy ({fecha_seleccionada.strftime('%d/%m/%Y')})")
     
-    # Ajuste Especial Domingo (C$ 310) Sumado al Día
+    # Ajuste Especial Domingo (+ C$ 310)
     AJUSTE_DOMINGO = 310.0 if str(fecha_seleccionada) == str(datetime.date.today()) else 0.0
 
     col_v, col_g = st.columns(2)
@@ -195,7 +190,7 @@ with tab2:
     res_v_sem = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_v_sem = pd.DataFrame(res_v_sem.data)
     ingresos_semana = float(df_v_sem["monto"].sum() + df_v_sem["propina"].sum()) if not df_v_sem.empty else 0.0
-    ingresos_semana += 310.0  # Suma de ajuste inicial del Domingo
+    ingresos_semana += 310.0
 
     res_g_sem = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_g_sem = pd.DataFrame(res_g_sem.data)
@@ -229,7 +224,6 @@ with tab2:
             if not sub_v.empty:
                 ing_dia = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
 
-        # Si es el día de hoy, le sumamos los 310 del domingo para reflejar los 690 totales
         if fecha_iter == hoy:
             ing_dia += 310.0
 
@@ -266,14 +260,12 @@ with tab3:
     str_inicio = f"{inicio_sem.day} De {MESES[inicio_sem.month]}"
     str_fin = f"{fin_sem.day} De {MESES[fin_sem.month]}"
     
-    st.caption(f"Colectado Hasta El Momento Esta Semana ({str_inicio} Al {str_fin})")
-
-    # Calcular Ganancia Neta de Hoy (incluye los C$ 310 del domingo para totalizar 690)
+    # Ganancia Neta de Hoy (Ingreso base 380 + 310 domingo = 690)
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
     res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
     
     ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
-    ing_hoy += 310.0  # Suma de ajuste inicial
+    ing_hoy += 310.0
     gas_hoy = sum([float(g["monto"]) for g in res_g_hoy.data]) if res_g_hoy.data else 0.0
     ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
 
@@ -294,11 +286,16 @@ with tab3:
     for f in fondos:
         col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
         pct = float(f["porcentaje"])
+        
         aporte_hoy = ganancia_hoy * (pct / 100.0)
+        
+        # El saldo en la base de datos ya incluye los valores iniciales (99, 99, 99, 44, 0, 0, 0)
+        saldo_base = float(f["saldo"])
+        total_acumulado = saldo_base + aporte_hoy
         
         col_f1.write(f"**{f['nombre']}** ({pct:.0f}%)")
         col_f2.write(f"C$ {aporte_hoy:.2f}")
-        col_f3.write(f"**C$ {float(f['saldo']):.2f}**")
+        col_f3.write(f"**C$ {total_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
             confirmar_retirar_fondo(f["id"], f["nombre"])
@@ -328,7 +325,6 @@ with tab4:
         else:
             fin_f = datetime.date(anio_sel, num_mes + 1, 1) - datetime.timedelta(days=1)
 
-    # Consulta De Datos Para El Reporte
     res_v_rep = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_v_r = pd.DataFrame(res_v_rep.data)
     ing_rep = float(df_v_r["monto"].sum() + df_v_r["propina"].sum()) if not df_v_r.empty else 0.0
