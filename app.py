@@ -17,7 +17,7 @@ DIAS_SEMANA = {
     4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
-# SALDOS BASE INICIALES (Domingo 16)
+# SALDOS BASE INICIALES (Previsión anterior al Domingo 16)
 SALDOS_INICIALES = {
     "Ofrenda a Dios": 99.00,
     "Ayuda a Padres": 99.00,
@@ -37,9 +37,22 @@ def init_supabase():
 
 supabase = init_supabase()
 
+# Verificar y asegurar el ingreso inicial del Domingo 16 de Agosto (C$ 300)
+def asegurar_domingo_16():
+    fecha_domingo = "2026-08-16"
+    res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
+    if not res_domingo.data:
+        supabase.table("viajes").insert({
+            "fecha": fecha_domingo,
+            "numero_viaje": 1,
+            "monto": 300.0,
+            "propina": 0.0
+        }).execute()
+
+asegurar_domingo_16()
+
 # Rango Semanal: Inicia el Domingo 16 de Agosto
 def obtener_rango_semanal(fecha_ref):
-    # Ajuste para que el inicio de la semana sea el Domingo
     idx = (fecha_ref.weekday() + 1) % 7
     inicio = fecha_ref - datetime.timedelta(days=idx)
     fin = inicio + datetime.timedelta(days=6)
@@ -169,11 +182,11 @@ with tab2:
 
     res_v_sem = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_v_sem = pd.DataFrame(res_v_sem.data) if res_v_sem.data else pd.DataFrame()
-    ingresos_semana = float(df_v_sem["monto"].sum() + df_v_sem["propina"].sum()) if not df_v_sem.empty else 0.0
+    ingresos_semana = float(df_v_sem["monto"].astype(float).sum() + df_v_sem["propina"].astype(float).sum()) if not df_v_sem.empty else 0.0
 
     res_g_sem = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_g_sem = pd.DataFrame(res_g_sem.data) if res_g_sem.data else pd.DataFrame()
-    gastos_semana = float(df_g_sem["monto"].sum()) if not df_g_sem.empty else 0.0
+    gastos_semana = float(df_g_sem["monto"].astype(float).sum()) if not df_g_sem.empty else 0.0
 
     ganancia_semana = ingresos_semana - gastos_semana
 
@@ -194,6 +207,10 @@ with tab2:
     df_v_todos = pd.DataFrame(res_v_todos.data) if res_v_todos.data else pd.DataFrame()
     df_g_todos = pd.DataFrame(res_g_todos.data) if res_g_todos.data else pd.DataFrame()
 
+    total_ingresos_tabla = 0.0
+    total_gastos_tabla = 0.0
+    total_neto_tabla = 0.0
+
     while fecha_iter <= fin_sem:
         f_str = str(fecha_iter)
         
@@ -211,6 +228,10 @@ with tab2:
 
         neto_dia = ing_dia - gas_dia
         
+        total_ingresos_tabla += ing_dia
+        total_gastos_tabla += gas_dia
+        total_neto_tabla += neto_dia
+
         nombre_dia = DIAS_SEMANA[fecha_iter.weekday()]
         fecha_formateada = f"{nombre_dia} {fecha_iter.day} De {MESES[fecha_iter.month]}"
         
@@ -221,6 +242,14 @@ with tab2:
             "Ganancia Neta (C$)": f"{neto_dia:.0f}"
         })
         fecha_iter += datetime.timedelta(days=1)
+
+    # Fila de Totales Generales
+    dias_semana_lista.append({
+        "Fecha": "TOTAL",
+        "Ingresos (C$)": f"{total_ingresos_tabla:.0f}",
+        "Gastos Operativos (C$)": f"{total_gastos_tabla:.0f}",
+        "Ganancia Neta (C$)": f"{total_neto_tabla:.0f}"
+    })
 
     df_dias_semana = pd.DataFrame(dias_semana_lista)
     st.table(df_dias_semana)
@@ -233,12 +262,10 @@ with tab3:
     
     hoy = datetime.date.today()
     
-    # Consulta de Ingresos reales registrados hoy
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
     ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
 
-    # Si aún no has registrado viajes en el formulario hoy pero ingresaste C$ 690, se usa 690 como base
-    ingreso_base_calculo = ing_hoy if ing_hoy > 0 else 690.0
+    ingreso_base_calculo = ing_hoy if ing_hoy > 0 else 380.0
 
     st.write(f"**Ingresos Brutos De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ingreso_base_calculo:.2f}`")
 
@@ -259,10 +286,7 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # Aporte calculado en base a los ingresos de hoy
         aporte_hoy = ingreso_base_calculo * (pct / 100.0)
-        
-        # Base anterior + Aporte Hoy
         base_anterior = SALDOS_INICIALES.get(nombre_fondo, 0.0)
         total_acumulado = base_anterior + aporte_hoy
         
@@ -300,11 +324,11 @@ with tab4:
 
     res_v_rep = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_v_r = pd.DataFrame(res_v_rep.data) if res_v_rep.data else pd.DataFrame()
-    ing_rep = float(df_v_r["monto"].sum() + df_v_r["propina"].sum()) if not df_v_r.empty else 0.0
+    ing_rep = float(df_v_r["monto"].astype(float).sum() + df_v_r["propina"].astype(float).sum()) if not df_v_r.empty else 0.0
 
     res_g_rep = supabase.table("gastos").select("monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_g_r = pd.DataFrame(res_g_rep.data) if res_g_rep.data else pd.DataFrame()
-    gas_rep = float(df_g_r["monto"].sum()) if not df_g_r.empty else 0.0
+    gas_rep = float(df_g_r["monto"].astype(float).sum()) if not df_g_r.empty else 0.0
 
     gan_rep = ing_rep - gas_rep
 
