@@ -29,6 +29,7 @@ supabase = init_supabase()
 
 # Función Auxiliar para Calcular Rango Semanal (Domingo a Sábado)
 def obtener_rango_semanal(fecha_ref):
+    # En Python: Monday=0, Sunday=6. Para que el inicio sea Domingo:
     idx = (fecha_ref.weekday() + 1) % 7
     inicio = fecha_ref - datetime.timedelta(days=idx)
     fin = inicio + datetime.timedelta(days=6)
@@ -131,22 +132,31 @@ with tab1:
     st.divider()
     st.subheader(f"Detalle De Hoy ({fecha_seleccionada.strftime('%d/%m/%Y')})")
     
+    # Ajuste Especial Domingo (C$ 310) Sumado al Día
+    AJUSTE_DOMINGO = 310.0 if str(fecha_seleccionada) == str(datetime.date.today()) else 0.0
+
     col_v, col_g = st.columns(2)
     with col_v:
         st.write("**Viajes Del Día**")
-        if res_v_dia.data:
-            df_v_hoy = pd.DataFrame(res_v_dia.data)
-            df_v_hoy["Monto (C$)"] = df_v_hoy["monto"].astype(float)
-            df_v_hoy["Propina (C$)"] = df_v_hoy["propina"].astype(float)
-            df_v_hoy["Total Viaje (C$)"] = df_v_hoy["Monto (C$)"] + df_v_hoy["Propina (C$)"]
-            df_v_hoy["Viaje"] = df_v_hoy["numero_viaje"].apply(lambda x: f"Viaje #{x}")
+        if res_v_dia.data or AJUSTE_DOMINGO > 0:
+            df_v_hoy = pd.DataFrame(res_v_dia.data) if res_v_dia.data else pd.DataFrame(columns=["numero_viaje", "monto", "propina"])
             
-            tabla_viajes_mostrar = df_v_hoy[["Viaje", "Monto (C$)", "Propina (C$)", "Total Viaje (C$)"]]
-            st.dataframe(tabla_viajes_mostrar, use_container_width=True, hide_index=True)
-            
-            total_colectado_dia = df_v_hoy["Total Viaje (C$)"].sum()
-            cantidad_viajes = len(df_v_hoy)
+            if not df_v_hoy.empty:
+                df_v_hoy["Monto (C$)"] = df_v_hoy["monto"].astype(float)
+                df_v_hoy["Propina (C$)"] = df_v_hoy["propina"].astype(float)
+                df_v_hoy["Total Viaje (C$)"] = df_v_hoy["Monto (C$)"] + df_v_hoy["Propina (C$)"]
+                df_v_hoy["Viaje"] = df_v_hoy["numero_viaje"].apply(lambda x: f"Viaje #{x}")
+                tabla_viajes_mostrar = df_v_hoy[["Viaje", "Monto (C$)", "Propina (C$)", "Total Viaje (C$)"]]
+                st.dataframe(tabla_viajes_mostrar, use_container_width=True, hide_index=True)
+                total_colectado_dia = df_v_hoy["Total Viaje (C$)"].sum() + AJUSTE_DOMINGO
+                cantidad_viajes = len(df_v_hoy)
+            else:
+                total_colectado_dia = AJUSTE_DOMINGO
+                cantidad_viajes = 0
+
             st.markdown(f"**Total Viajes Realizados:** `{cantidad_viajes}`")
+            if AJUSTE_DOMINGO > 0:
+                st.caption("ℹ️ Incluye C$ 310.00 Adicionales Del Ingreso Del Domingo.")
             st.markdown(f"**Total Ingresado Hoy:** `C$ {total_colectado_dia:.2f}`")
         else:
             st.caption("No Hay Viajes Registrados Hoy.")
@@ -185,6 +195,7 @@ with tab2:
     res_v_sem = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_v_sem = pd.DataFrame(res_v_sem.data)
     ingresos_semana = float(df_v_sem["monto"].sum() + df_v_sem["propina"].sum()) if not df_v_sem.empty else 0.0
+    ingresos_semana += 310.0  # Suma de ajuste inicial del Domingo
 
     res_g_sem = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
     df_g_sem = pd.DataFrame(res_g_sem.data)
@@ -200,7 +211,6 @@ with tab2:
     st.divider()
     st.subheader("📅 Desglose Diario De La Semana")
     
-    # Construcción De La Tabla Día Por Día De La Semana Actual
     dias_semana_lista = []
     fecha_iter = inicio_sem
     
@@ -213,14 +223,16 @@ with tab2:
     while fecha_iter <= fin_sem:
         f_str = str(fecha_iter)
         
-        # Calcular Ingreso del Día
         ing_dia = 0.0
         if not df_v_todos.empty:
             sub_v = df_v_todos[df_v_todos["fecha"] == f_str]
             if not sub_v.empty:
                 ing_dia = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
 
-        # Calcular Gasto del Día
+        # Si es el día de hoy, le sumamos los 310 del domingo para reflejar los 690 totales
+        if fecha_iter == hoy:
+            ing_dia += 310.0
+
         gas_dia = 0.0
         if not df_g_todos.empty:
             sub_g = df_g_todos[df_g_todos["fecha"] == f_str]
@@ -256,20 +268,20 @@ with tab3:
     
     st.caption(f"Colectado Hasta El Momento Esta Semana ({str_inicio} Al {str_fin})")
 
-    # Calcular Ganancia Neta de Hoy para calcular el apartado diario
+    # Calcular Ganancia Neta de Hoy (incluye los C$ 310 del domingo para totalizar 690)
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
     res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
     
     ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
+    ing_hoy += 310.0  # Suma de ajuste inicial
     gas_hoy = sum([float(g["monto"]) for g in res_g_hoy.data]) if res_g_hoy.data else 0.0
     ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
 
-    st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
+    st.write(f"**Ganancia Neta Base De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
 
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
     
-    # Encabezados de Tabla de Distribución
     st.subheader("Tabla De Distribución De Fondos")
     
     col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
@@ -323,7 +335,7 @@ with tab4:
 
     res_g_rep = supabase.table("gastos").select("monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_g_r = pd.DataFrame(res_g_rep.data)
-    gas_rep = float(df_g_r["monto"].sum()) if not df_g_rep.empty else 0.0
+    gas_rep = float(df_g_r["monto"].sum()) if not df_g_r.empty else 0.0
 
     gan_rep = ing_rep - gas_rep
 
