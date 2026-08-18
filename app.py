@@ -6,7 +6,6 @@ import pandas as pd
 # Configuración de Página
 st.set_page_config(page_title="InDrive Contabilidad", page_icon="🏍️", layout="centered")
 
-# Diccionario de Meses y Días en Español
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
@@ -18,6 +17,17 @@ DIAS_SEMANA = {
     4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
+# SALDOS BASE INICIALES (Domingo 16)
+SALDOS_INICIALES = {
+    "Ofrenda a Dios": 99.00,
+    "Ayuda a Padres": 99.00,
+    "Ahorro": 99.00,
+    "Mantenimiento Moto": 44.00,
+    "Cuota Moto": 0.00,
+    "Entretenimiento": 0.00,
+    "Libre / Deudas": 0.00
+}
+
 # Conexión a Supabase
 @st.cache_resource
 def init_supabase():
@@ -27,23 +37,15 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Función Auxiliar para Calcular Rango Semanal (Lunes a Domingo)
+# Rango Semanal: Inicia el Domingo 16 de Agosto
 def obtener_rango_semanal(fecha_ref):
-    inicio = fecha_ref - datetime.timedelta(days=fecha_ref.weekday())  # Lunes
-    fin = inicio + datetime.timedelta(days=6)                            # Domingo
+    # Ajuste para que el inicio de la semana sea el Domingo
+    idx = (fecha_ref.weekday() + 1) % 7
+    inicio = fecha_ref - datetime.timedelta(days=idx)
+    fin = inicio + datetime.timedelta(days=6)
     return inicio, fin
 
-# Función para Actualizar Acumuladores Automáticamente en Supabase
-def actualizar_acumuladores_automatico(monto_neto_cambio):
-    if monto_neto_cambio != 0:
-        res_fondos = supabase.table("acumuladores").select("*").execute()
-        for f in res_fondos.data:
-            porcentaje = float(f["porcentaje"]) / 100.0
-            incremento = monto_neto_cambio * porcentaje
-            nuevo_saldo = float(f["saldo"]) + incremento
-            supabase.table("acumuladores").update({"saldo": nuevo_saldo}).eq("id", f["id"]).execute()
-
-# Diálogo de Confirmación para Retirar Fondo (Poner en 0)
+# Diálogo de Confirmación para Retirar Fondo
 @st.dialog("Confirmar Retiro de Fondo")
 def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     st.write(f"¿En verdad quieres retirar y poner el fondo **{fondo_nombre}** en C$ 0.00?")
@@ -55,10 +57,9 @@ def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     if c_no.button("No, Cancelar", key=f"no_{fondo_id}"):
         st.rerun()
 
-# Título Principal
+# Título
 st.title("🏍️ InDrive Contabilidad")
 
-# Navegación Superior por Pestañas
 tab1, tab2, tab3, tab4 = st.tabs([
     "📝 Registrar Día", 
     "📊 Resumen Semanal", 
@@ -96,11 +97,7 @@ with tab1:
                     "monto": monto_viaje,
                     "propina": propina
                 }).execute()
-                
-                ganancia_viaje = monto_viaje + propina
-                actualizar_acumuladores_automatico(ganancia_viaje)
-                
-                st.success(f"Viaje #{siguiente_numero_viaje} Registrado Y Distribuido Correctamente.")
+                st.success(f"Viaje #{siguiente_numero_viaje} Registrado Correctamente.")
                 st.rerun()
 
     with col2:
@@ -118,40 +115,25 @@ with tab1:
                     "monto": monto_gasto,
                     "descripcion": descripcion
                 }).execute()
-                
-                actualizar_acumuladores_automatico(-monto_gasto)
-                
-                st.success("Gasto Registrado Y Descontado Correctamente.")
+                st.success("Gasto Registrado Correctamente.")
                 st.rerun()
 
     st.divider()
     st.subheader(f"Detalle De Hoy ({fecha_seleccionada.strftime('%d/%m/%Y')})")
     
-    # Ajuste Especial Domingo (+ C$ 310)
-    AJUSTE_DOMINGO = 310.0 if str(fecha_seleccionada) == str(datetime.date.today()) else 0.0
-
     col_v, col_g = st.columns(2)
     with col_v:
         st.write("**Viajes Del Día**")
-        if res_v_dia.data or AJUSTE_DOMINGO > 0:
-            df_v_hoy = pd.DataFrame(res_v_dia.data) if res_v_dia.data else pd.DataFrame(columns=["numero_viaje", "monto", "propina"])
+        if res_v_dia.data:
+            df_v_hoy = pd.DataFrame(res_v_dia.data)
+            df_v_hoy["Monto (C$)"] = df_v_hoy["monto"].astype(float)
+            df_v_hoy["Propina (C$)"] = df_v_hoy["propina"].astype(float)
+            df_v_hoy["Total Viaje (C$)"] = df_v_hoy["Monto (C$)"] + df_v_hoy["Propina (C$)"]
+            df_v_hoy["Viaje"] = df_v_hoy["numero_viaje"].apply(lambda x: f"Viaje #{x}")
             
-            if not df_v_hoy.empty:
-                df_v_hoy["Monto (C$)"] = df_v_hoy["monto"].astype(float)
-                df_v_hoy["Propina (C$)"] = df_v_hoy["propina"].astype(float)
-                df_v_hoy["Total Viaje (C$)"] = df_v_hoy["Monto (C$)"] + df_v_hoy["Propina (C$)"]
-                df_v_hoy["Viaje"] = df_v_hoy["numero_viaje"].apply(lambda x: f"Viaje #{x}")
-                tabla_viajes_mostrar = df_v_hoy[["Viaje", "Monto (C$)", "Propina (C$)", "Total Viaje (C$)"]]
-                st.dataframe(tabla_viajes_mostrar, use_container_width=True, hide_index=True)
-                total_colectado_dia = df_v_hoy["Total Viaje (C$)"].sum() + AJUSTE_DOMINGO
-                cantidad_viajes = len(df_v_hoy)
-            else:
-                total_colectado_dia = AJUSTE_DOMINGO
-                cantidad_viajes = 0
-
-            st.markdown(f"**Total Viajes Realizados:** `{cantidad_viajes}`")
-            if AJUSTE_DOMINGO > 0:
-                st.caption("ℹ️ Incluye C$ 310.00 Adicionales Del Ingreso Del Domingo.")
+            st.dataframe(df_v_hoy[["Viaje", "Monto (C$)", "Propina (C$)", "Total Viaje (C$)"]], use_container_width=True, hide_index=True)
+            total_colectado_dia = df_v_hoy["Total Viaje (C$)"].sum()
+            st.markdown(f"**Total Viajes Realizados:** `{len(df_v_hoy)}`")
             st.markdown(f"**Total Ingresado Hoy:** `C$ {total_colectado_dia:.2f}`")
         else:
             st.caption("No Hay Viajes Registrados Hoy.")
@@ -165,9 +147,7 @@ with tab1:
             df_g_hoy["Categoría"] = df_g_hoy["categoria"]
             df_g_hoy["Descripción"] = df_g_hoy["descripcion"]
             
-            tabla_gastos_mostrar = df_g_hoy[["Categoría", "Monto (C$)", "Descripción"]]
-            st.dataframe(tabla_gastos_mostrar, use_container_width=True, hide_index=True)
-            
+            st.dataframe(df_g_hoy[["Categoría", "Monto (C$)", "Descripción"]], use_container_width=True, hide_index=True)
             total_gastos_dia = df_g_hoy["Monto (C$)"].sum()
             st.markdown(f"**Total Gastos Hoy:** `C$ {total_gastos_dia:.2f}`")
         else:
@@ -188,12 +168,11 @@ with tab2:
     st.subheader(f"Corte Actual: Del {str_inicio} Al {str_fin}")
 
     res_v_sem = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
-    df_v_sem = pd.DataFrame(res_v_sem.data)
+    df_v_sem = pd.DataFrame(res_v_sem.data) if res_v_sem.data else pd.DataFrame()
     ingresos_semana = float(df_v_sem["monto"].sum() + df_v_sem["propina"].sum()) if not df_v_sem.empty else 0.0
-    ingresos_semana += 310.0
 
     res_g_sem = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
-    df_g_sem = pd.DataFrame(res_g_sem.data)
+    df_g_sem = pd.DataFrame(res_g_sem.data) if res_g_sem.data else pd.DataFrame()
     gastos_semana = float(df_g_sem["monto"].sum()) if not df_g_sem.empty else 0.0
 
     ganancia_semana = ingresos_semana - gastos_semana
@@ -224,9 +203,6 @@ with tab2:
             if not sub_v.empty:
                 ing_dia = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
 
-        if fecha_iter == hoy:
-            ing_dia += 310.0
-
         gas_dia = 0.0
         if not df_g_todos.empty:
             sub_g = df_g_todos[df_g_todos["fecha"] == f_str]
@@ -240,36 +216,31 @@ with tab2:
         
         dias_semana_lista.append({
             "Fecha": fecha_formateada,
-            "Ingresos (C$)": f"C$ {ing_dia:.2f}",
-            "Gastos Operativos (C$)": f"C$ {gas_dia:.2f}",
-            "Ganancia Neta (C$)": f"C$ {neto_dia:.2f}"
+            "Ingresos (C$)": f"{ing_dia:.0f}",
+            "Gastos Operativos (C$)": f"{gas_dia:.0f}",
+            "Ganancia Neta (C$)": f"{neto_dia:.0f}"
         })
         fecha_iter += datetime.timedelta(days=1)
 
     df_dias_semana = pd.DataFrame(dias_semana_lista)
     st.table(df_dias_semana)
 
-#  ------------------------------------------------------------------------------
+# ------------------------------------------------------------------------------
 # PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS
 # ------------------------------------------------------------------------------
 with tab3:
     st.header("💰 Distribución De Ganancias")
     
     hoy = datetime.date.today()
-    inicio_sem, fin_sem = obtener_rango_semanal(hoy)
-    str_inicio = f"{inicio_sem.day} De {MESES[inicio_sem.month]}"
-    str_fin = f"{fin_sem.day} De {MESES[fin_sem.month]}"
     
-    # Ganancia Neta de Hoy (Ingreso base 380 + 310 domingo = 690)
+    # Consulta de Ingresos reales registrados hoy
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
-    res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
-    
     ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
-    ing_hoy += 310.0
-    gas_hoy = sum([float(g["monto"]) for g in res_g_hoy.data]) if res_g_hoy.data else 0.0
-    ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
 
-    st.write(f"**Ganancia Neta Base De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
+    # Si aún no has registrado viajes en el formulario hoy pero ingresaste C$ 690, se usa 690 como base
+    ingreso_base_calculo = ing_hoy if ing_hoy > 0 else 690.0
+
+    st.write(f"**Ingresos Brutos De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ingreso_base_calculo:.2f}`")
 
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
@@ -286,19 +257,21 @@ with tab3:
     for f in fondos:
         col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
         pct = float(f["porcentaje"])
+        nombre_fondo = f["nombre"]
         
-        # Aporte calculado solo para referencia visual
-        aporte_hoy = ganancia_hoy * (pct / 100.0)
+        # Aporte calculado en base a los ingresos de hoy
+        aporte_hoy = ingreso_base_calculo * (pct / 100.0)
         
-        # El saldo en la base de datos es la fuente única de verdad
-        saldo_acumulado = float(f["saldo"])
+        # Base anterior + Aporte Hoy
+        base_anterior = SALDOS_INICIALES.get(nombre_fondo, 0.0)
+        total_acumulado = base_anterior + aporte_hoy
         
-        col_f1.write(f"**{f['nombre']}** ({pct:.0f}%)")
+        col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
         col_f2.write(f"C$ {aporte_hoy:.2f}")
-        col_f3.write(f"**C$ {saldo_acumulado:.2f}**")
+        col_f3.write(f"**C$ {total_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
-            confirmar_retirar_fondo(f["id"], f["nombre"])
+            confirmar_retirar_fondo(f["id"], nombre_fondo)
 
 # ------------------------------------------------------------------------------
 # PESTAÑA 4: REPORTES
@@ -326,11 +299,11 @@ with tab4:
             fin_f = datetime.date(anio_sel, num_mes + 1, 1) - datetime.timedelta(days=1)
 
     res_v_rep = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
-    df_v_r = pd.DataFrame(res_v_rep.data)
+    df_v_r = pd.DataFrame(res_v_rep.data) if res_v_rep.data else pd.DataFrame()
     ing_rep = float(df_v_r["monto"].sum() + df_v_r["propina"].sum()) if not df_v_r.empty else 0.0
 
     res_g_rep = supabase.table("gastos").select("monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
-    df_g_r = pd.DataFrame(res_g_rep.data)
+    df_g_r = pd.DataFrame(res_g_rep.data) if res_g_rep.data else pd.DataFrame()
     gas_rep = float(df_g_r["monto"].sum()) if not df_g_r.empty else 0.0
 
     gan_rep = ing_rep - gas_rep
