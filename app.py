@@ -249,7 +249,7 @@ with tab2:
     df_dias_semana = pd.DataFrame(dias_semana_lista)
     st.table(df_dias_semana)
 
-# ------------------------------------------------------------------------------
+#  ------------------------------------------------------------------------------
 # PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS
 # ------------------------------------------------------------------------------
 with tab3:
@@ -287,15 +287,15 @@ with tab3:
         col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
         pct = float(f["porcentaje"])
         
+        # Aporte calculado solo para referencia visual
         aporte_hoy = ganancia_hoy * (pct / 100.0)
         
-        # El saldo en la base de datos ya incluye los valores iniciales (99, 99, 99, 44, 0, 0, 0)
-        saldo_base = float(f["saldo"])
-        total_acumulado = saldo_base + aporte_hoy
+        # El saldo en la base de datos es la fuente única de verdad
+        saldo_acumulado = float(f["saldo"])
         
         col_f1.write(f"**{f['nombre']}** ({pct:.0f}%)")
         col_f2.write(f"C$ {aporte_hoy:.2f}")
-        col_f3.write(f"**C$ {total_acumulado:.2f}**")
+        col_f3.write(f"**C$ {saldo_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
             confirmar_retirar_fondo(f["id"], f["nombre"])
