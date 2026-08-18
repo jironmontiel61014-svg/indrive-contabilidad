@@ -17,7 +17,7 @@ DIAS_SEMANA = {
     4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
-# SALDOS BASE INICIALES (Previsión anterior al Domingo 16)
+# SALDOS BASE INICIALES (Previsión previa)
 SALDOS_INICIALES = {
     "Ofrenda a Dios": 99.00,
     "Ayuda a Padres": 99.00,
@@ -37,7 +37,7 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Verificar y asegurar el ingreso inicial del Domingo 16 de Agosto (C$ 300)
+# Verificar y asegurar el ingreso inicial del Domingo 16 de Agosto (C$ 310)
 def asegurar_domingo_16():
     fecha_domingo = "2026-08-16"
     res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
@@ -45,7 +45,7 @@ def asegurar_domingo_16():
         supabase.table("viajes").insert({
             "fecha": fecha_domingo,
             "numero_viaje": 1,
-            "monto": 300.0,
+            "monto": 310.0,
             "propina": 0.0
         }).execute()
 
@@ -261,13 +261,20 @@ with tab3:
     st.header("💰 Distribución De Ganancias")
     
     hoy = datetime.date.today()
-    
-    res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
-    ing_hoy = sum([float(v["monto"]) + float(v["propina"]) for v in res_v_hoy.data]) if res_v_hoy.data else 0.0
+    inicio_sem, fin_sem = obtener_rango_semanal(hoy)
 
-    ingreso_base_calculo = ing_hoy if ing_hoy > 0 else 380.0
+    # Obtenemos la Ganancia Neta de la semana actual directamente
+    res_v_dist = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
+    df_v_dist = pd.DataFrame(res_v_dist.data) if res_v_dist.data else pd.DataFrame()
+    ing_semana_dist = float(df_v_dist["monto"].astype(float).sum() + df_v_dist["propina"].astype(float).sum()) if not df_v_dist.empty else 0.0
 
-    st.write(f"**Ingresos Brutos De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ingreso_base_calculo:.2f}`")
+    res_g_dist = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
+    df_g_dist = pd.DataFrame(res_g_dist.data) if res_g_dist.data else pd.DataFrame()
+    gas_semana_dist = float(df_g_dist["monto"].astype(float).sum()) if not df_g_dist.empty else 0.0
+
+    ganancia_base_calculo = max(0.0, ing_semana_dist - gas_semana_dist)
+
+    st.write(f"**Ganancia Neta Acumulada En La Semana:** `C$ {ganancia_base_calculo:.2f}`")
 
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
@@ -276,7 +283,7 @@ with tab3:
     
     col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
     col_h1.write("**Fondo (% Porcentaje)**")
-    col_h2.write("**Aporte Hoy (C$)**")
+    col_h2.write("**Aporte Semanal (C$)**")
     col_h3.write("**Total Acumulado (C$)**")
     col_h4.write("**Acción**")
     st.divider()
@@ -286,12 +293,12 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        aporte_hoy = ingreso_base_calculo * (pct / 100.0)
+        aporte_semanal = ganancia_base_calculo * (pct / 100.0)
         base_anterior = SALDOS_INICIALES.get(nombre_fondo, 0.0)
-        total_acumulado = base_anterior + aporte_hoy
+        total_acumulado = base_anterior + aporte_semanal
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
-        col_f2.write(f"C$ {aporte_hoy:.2f}")
+        col_f2.write(f"C$ {aporte_semanal:.2f}")
         col_f3.write(f"**C$ {total_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
