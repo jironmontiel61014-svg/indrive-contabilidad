@@ -40,31 +40,29 @@ def asegurar_domingo_16():
 
 asegurar_domingo_16()
 
-# Asegurar Saldos Iniciales Correctos en la tabla 'acumuladores'
-def asegurar_saldos_base():
-    saldos_objetivo = [
-        {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo_base": 133.50},
-        {"nombre": "Ayuda a Padres", "porcentaje": 5.0, "saldo_base": 133.50},
-        {"nombre": "Ahorro (5%)", "porcentaje": 5.0, "saldo_base": 133.50},
-        {"nombre": "Mantenimiento Moto (5%)", "porcentaje": 5.0, "saldo_base": 78.50},
-        {"nombre": "Cuota moto", "porcentaje": 20.0, "saldo_base": 0.00},
-        {"nombre": "Entretenimiento", "porcentaje": 10.0, "saldo_base": 0.00},
-        {"nombre": "Libre/Deuda", "porcentaje": 50.0, "saldo_base": 0.00},
+# Limpieza y estructuración correcta de fondos (Elimina duplicados de Supabase)
+def corregir_y_limpiar_fondos():
+    fondos_limpios = [
+        {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo": 133.50},
+        {"nombre": "Ayuda a Padres", "porcentaje": 5.0, "saldo": 133.50},
+        {"nombre": "Ahorro (5%)", "porcentaje": 5.0, "saldo": 133.50},
+        {"nombre": "Mantenimiento Moto (5%)", "porcentaje": 5.0, "saldo": 78.50},
+        {"nombre": "Cuota moto", "porcentaje": 20.0, "saldo": 0.00},
+        {"nombre": "Entretenimiento", "porcentaje": 10.0, "saldo": 0.00},
+        {"nombre": "Libre/Deuda", "porcentaje": 50.0, "saldo": 0.00},
     ]
     
     res = supabase.table("acumuladores").select("*").execute()
-    fondos_existentes = {f["nombre"]: f for f in res.data} if res.data else {}
+    
+    # Si la tabla tiene duplicados (más de 7 registros) o está vacía, la reseteamos limpia
+    if not res.data or len(res.data) != 7:
+        for f in res.data:
+            supabase.table("acumuladores").delete().eq("id", f["id"]).execute()
+            
+        for item in fondos_limpios:
+            supabase.table("acumuladores").insert(item).execute()
 
-    for item in saldos_objetivo:
-        nombre = item["nombre"]
-        if nombre not in fondos_existentes:
-            supabase.table("acumuladores").insert({
-                "nombre": nombre,
-                "porcentaje": item["porcentaje"],
-                "saldo": item["saldo_base"]
-            }).execute()
-
-asegurar_saldos_base()
+corregir_y_limpiar_fondos()
 
 # Rango Semanal: Inicia el Domingo
 def obtener_rango_semanal(fecha_ref):
@@ -280,7 +278,7 @@ with tab3:
     
     hoy = datetime.date.today()
 
-    # 1. Obtenemos la Ganancia Neta de HOY únicamente
+    # 1. Ganancia Neta de HOY
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
     df_v_h = pd.DataFrame(res_v_hoy.data) if res_v_hoy.data else pd.DataFrame()
     ing_hoy = float(df_v_h["monto"].astype(float).sum() + df_v_h["propina"].astype(float).sum()) if not df_v_h.empty else 0.0
@@ -293,7 +291,7 @@ with tab3:
 
     st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
 
-    # 2. Cargar Fondos desde Supabase
+    # 2. Cargar Fondos limpios desde Supabase
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
     
@@ -311,13 +309,13 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # Saldo base previo guardado en Supabase
+        # Saldo base previo
         saldo_base = float(f.get("saldo", 0.0))
         
-        # Aporte calculado únicamente para el día de hoy
+        # Aporte únicamente de hoy
         aporte_hoy = ganancia_hoy * (pct / 100.0)
         
-        # Total acumulado = Saldo previo acumulado + Aporte de hoy
+        # Total acumulado = Saldo previo base + Aporte de hoy
         total_acumulado = saldo_base + aporte_hoy
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
