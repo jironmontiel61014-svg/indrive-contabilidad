@@ -22,6 +22,15 @@ DIAS_SEMANA = {
     4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
+CATEGORIAS_GASTOS = [
+    "Recarga InDrive", 
+    "Gasolina", 
+    "Agua", 
+    "Gaseosa o jugo", 
+    "Comida en calle", 
+    "Antojo de dulce"
+]
+
 # Conexión a Supabase
 @st.cache_resource
 def init_supabase():
@@ -66,7 +75,7 @@ def asegurar_domingo_16():
 
 asegurar_domingo_16()
 
-# Limpieza y estructuración correcta de fondos (Nombres limpios)
+# Limpieza y estructuración correcta de fondos
 def corregir_y_limpiar_fondos():
     fondos_limpios = [
         {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo": 133.50},
@@ -97,6 +106,65 @@ def corregir_y_limpiar_fondos():
             supabase.table("acumuladores").insert(item).execute()
 
 corregir_y_limpiar_fondos()
+
+# Acumular aportes de días pasados automáticamente si no han sido procesados
+def actualizar_saldos_acumulados():
+    hoy = obtener_fecha_hoy()
+    res_acum = supabase.table("acumuladores").select("*").execute()
+    if not res_acum.data:
+        return
+        
+    for ac in res_acum.data:
+        id_fondo = ac["id"]
+        pct = float(ac["porcentaje"])
+        saldo_actual = float(ac.get("saldo", 0.0))
+        u_act_str = ac.get("ultima_actualizacion")
+        
+        if not u_act_str:
+            u_act = datetime.date(2026, 8, 16)
+        else:
+            try:
+                u_act = datetime.datetime.strptime(u_act_str, "%Y-%m-%d").date()
+            except ValueError:
+                u_act = datetime.date(2026, 8, 16)
+        
+        # Si la última actualización es anterior a hoy, procesamos días anteriores
+        if u_act < hoy:
+            ayer = hoy - datetime.timedelta(days=1)
+            nuevo_saldo = saldo_actual
+            
+            if u_act <= ayer:
+                res_v = supabase.table("viajes").select("fecha, monto, propina").gte("fecha", str(u_act)).lte("fecha", str(ayer)).execute()
+                res_g = supabase.table("gastos").select("fecha, monto").gte("fecha", str(u_act)).lte("fecha", str(ayer)).execute()
+                
+                df_v = pd.DataFrame(res_v.data) if res_v.data else pd.DataFrame()
+                df_g = pd.DataFrame(res_g.data) if res_g.data else pd.DataFrame()
+                
+                fecha_iter = u_act
+                while fecha_iter <= ayer:
+                    f_str = str(fecha_iter)
+                    ing = 0.0
+                    if not df_v.empty:
+                        sub_v = df_v[df_v["fecha"] == f_str]
+                        if not sub_v.empty:
+                            ing = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
+                    
+                    gas = 0.0
+                    if not df_g.empty:
+                        sub_g = df_g[df_g["fecha"] == f_str]
+                        if not sub_g.empty:
+                            gas = float(sub_g["monto"].astype(float).sum())
+                    
+                    gan_dia = max(0.0, ing - gas)
+                    nuevo_saldo += gan_dia * (pct / 100.0)
+                    fecha_iter += datetime.timedelta(days=1)
+            
+            supabase.table("acumuladores").update({
+                "saldo": nuevo_saldo,
+                "ultima_actualizacion": str(hoy)
+            }).eq("id", id_fondo).execute()
+
+actualizar_saldos_acumulados()
 
 # Rango Semanal: Inicia el Domingo
 def obtener_rango_semanal(fecha_ref):
@@ -167,7 +235,7 @@ with tab1:
     with col2:
         st.subheader("Registrar Nuevo Gasto")
         with st.form("form_gasto", clear_on_submit=True):
-            categoria = st.selectbox("Categoría De Gasto", ["Recarga InDrive", "Gasolina", "Consumo Personal", "Otros"])
+            categoria = st.selectbox("Categoría De Gasto", CATEGORIAS_GASTOS)
             monto_gasto = st.number_input("Monto Del Gasto (C$)", min_value=0.0, step=10.0)
             descripcion = st.text_input("Descripción Del Gasto (Opcional)")
             btn_gasto = st.form_submit_button("Guardar Gasto")
@@ -343,13 +411,13 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # Saldo base previo
+        # Saldo base previo acumulado
         saldo_base = float(f.get("saldo", 0.0))
         
-        # Aporte únicamente de hoy
+        # Aporte únicamente del día de hoy
         aporte_hoy = ganancia_hoy * (pct / 100.0)
         
-        # Total acumulado = Saldo previo base + Aporte de hoy
+        # Total acumulado = Saldo previo + Aporte de hoy
         total_acumulado = saldo_base + aporte_hoy
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
@@ -360,58 +428,80 @@ with tab3:
             confirmar_retirar_fondo(f["id"], nombre_fondo)
 
 # ------------------------------------------------------------------------------
-# PESTAÑA 4: REPORTES
+# PESTAÑA 4: REPORTES OPERATIVOS Y FINANCIEROS
 # ------------------------------------------------------------------------------
 with tab4:
-    st.header("📈 Reportes De Ingresos, Gastos Y Distribución")
+    st.header("📈 Reportes Operativos Y Financieros")
     
     tipo_reporte = st.selectbox("Filtro De Reporte", ["Diario", "Semanal", "Mensual"])
     
+    hoy = obtener_fecha_hoy()
     if tipo_reporte == "Diario":
-        f_rep = st.date_input("Seleccionar Día De Reporte", obtener_fecha_hoy())
+        f_rep = st.date_input("Seleccionar Día De Reporte", hoy)
         inicio_f, fin_f = f_rep, f_rep
     elif tipo_reporte == "Semanal":
-        f_ref = st.date_input("Seleccionar Fecha De La Semana", obtener_fecha_hoy())
+        f_ref = st.date_input("Seleccionar Fecha De La Semana", hoy)
         inicio_f, fin_f = obtener_rango_semanal(f_ref)
         st.caption(f"Rango Seleccionado: Del {inicio_f.strftime('%d/%m/%Y')} Al {fin_f.strftime('%d/%m/%Y')}")
     else:
-        mes_sel = st.selectbox("Seleccionar Mes", list(MESES.values()), index=obtener_fecha_hoy().month - 1)
+        mes_sel = st.selectbox("Seleccionar Mes", list(MESES.values()), index=hoy.month - 1)
         num_mes = list(MESES.keys())[list(MESES.values()).index(mes_sel)]
-        anio_sel = st.number_input("Año", min_value=2024, max_value=2030, value=obtener_fecha_hoy().year)
+        anio_sel = st.number_input("Año", min_value=2024, max_value=2030, value=hoy.year)
         inicio_f = datetime.date(anio_sel, num_mes, 1)
         if num_mes == 12:
             fin_f = datetime.date(anio_sel, 12, 31)
         else:
             fin_f = datetime.date(anio_sel, num_mes + 1, 1) - datetime.timedelta(days=1)
 
+    st.divider()
+
+    # Obtención de datos del período
     res_v_rep = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_v_r = pd.DataFrame(res_v_rep.data) if res_v_rep.data else pd.DataFrame()
-    ing_rep = float(df_v_r["monto"].astype(float).sum() + df_v_r["propina"].astype(float).sum()) if not df_v_r.empty else 0.0
+    
+    ing_bruto = float(df_v_r["monto"].astype(float).sum()) if not df_v_r.empty and "monto" in df_v_r else 0.0
+    propinas = float(df_v_r["propina"].astype(float).sum()) if not df_v_r.empty and "propina" in df_v_r else 0.0
+    total_ingresos = ing_bruto + propinas
 
-    res_g_rep = supabase.table("gastos").select("monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
+    res_g_rep = supabase.table("gastos").select("categoria, monto").gte("fecha", str(inicio_f)).lte("fecha", str(fin_f)).execute()
     df_g_r = pd.DataFrame(res_g_rep.data) if res_g_rep.data else pd.DataFrame()
-    gas_rep = float(df_g_r["monto"].astype(float).sum()) if not df_g_r.empty else 0.0
+    total_gastos = float(df_g_r["monto"].astype(float).sum()) if not df_g_r.empty and "monto" in df_g_r else 0.0
 
-    gan_rep = ing_rep - gas_rep
+    ganancia_real = total_ingresos - total_gastos
 
-    r1, r2, r3 = st.columns(3)
-    r1.metric("Ingresos Totales", f"C$ {ing_rep:.2f}")
-    r2.metric("Gastos Operativos", f"C$ {gas_rep:.2f}")
-    r3.metric("Ganancia Neta", f"C$ {gan_rep:.2f}")
+    # 1. REPORTE DE INGRESOS
+    st.subheader("1. 💵 Reporte De Ingresos")
+    col_i1, col_i2, col_i3 = st.columns(3)
+    col_i1.metric("Ingresos Por Viajes", f"C$ {ing_bruto:.2f}")
+    col_i2.metric("Propinas Recibidas", f"C$ {propinas:.2f}")
+    col_i3.metric("Total Ingresos", f"C$ {total_ingresos:.2f}")
 
-    st.subheader("Distribución Proyectada De La Ganancia En El Período")
+    st.divider()
+
+    # 2. REPORTE DE GASTOS OPERATIVOS DESGLOSADO
+    st.subheader("2. ⛽ Reporte De Gastos Operativos (Desglosado)")
     
-    res_acum = supabase.table("acumuladores").select("nombre, porcentaje").order("id").execute()
-    datos_distribucion = []
-    
-    for ac in res_acum.data:
-        pct = float(ac["porcentaje"])
-        monto_distribuido = max(0.0, gan_rep) * (pct / 100.0)
-        datos_distribucion.append({
-            "Categoría De Fondo": ac["nombre"],
-            "Porcentaje (%)": f"{pct:.0f}%",
-            "Monto Generado (C$)": f"C$ {monto_distribuido:.2f}"
+    desglose_gastos = []
+    for cat in CATEGORIAS_GASTOS:
+        monto_cat = 0.0
+        if not df_g_r.empty and "categoria" in df_g_r and "monto" in df_g_r:
+            sub_cat = df_g_r[df_g_r["categoria"] == cat]
+            if not sub_cat.empty:
+                monto_cat = float(sub_cat["monto"].astype(float).sum())
+        desglose_gastos.append({
+            "Categoría De Gasto": cat,
+            "Total Gastado (C$)": f"C$ {monto_cat:.2f}"
         })
+    
+    df_desglose = pd.DataFrame(desglose_gastos)
+    st.table(df_desglose)
+    st.markdown(f"**Total Gastos Operativos Del Período:** `C$ {total_gastos:.2f}`")
 
-    df_dist = pd.DataFrame(datos_distribucion)
-    st.table(df_dist)
+    st.divider()
+
+    # 3. BALANCE REAL
+    st.subheader("3. ⚖️ Reporte Real De Ganancias Netas")
+    col_r1, col_r2, col_r3 = st.columns(3)
+    col_r1.metric("Total Ingresos (+)", f"C$ {total_ingresos:.2f}")
+    col_r2.metric("Total Gastos Operativos (-)", f"C$ {total_gastos:.2f}")
+    col_r3.metric("Ganancia Real (=)", f"C$ {ganancia_real:.2f}")
