@@ -42,36 +42,42 @@ supabase = init_supabase()
 
 # Mover ingreso ingresado por error el 19/08/2026 al 18/08/2026 como propina
 def corregir_ingreso_19_a_18():
-    res19 = supabase.table("viajes").select("*").eq("fecha", "2026-08-19").execute()
-    if res19.data:
-        for v in res19.data:
-            monto_mover = float(v["monto"]) + float(v["propina"])
-            supabase.table("viajes").delete().eq("id", v["id"]).execute()
-            
-            res18 = supabase.table("viajes").select("*").eq("fecha", "2026-08-18").order("numero_viaje").execute()
-            viajes18 = [x["numero_viaje"] for x in res18.data] if res18.data else []
-            siguiente_num = max(viajes18, default=0) + 1
-            
-            supabase.table("viajes").insert({
-                "fecha": "2026-08-18",
-                "numero_viaje": siguiente_num,
-                "monto": 0.0,
-                "propina": monto_mover
-            }).execute()
+    try:
+        res19 = supabase.table("viajes").select("*").eq("fecha", "2026-08-19").execute()
+        if res19.data:
+            for v in res19.data:
+                monto_mover = float(v["monto"]) + float(v["propina"])
+                supabase.table("viajes").delete().eq("id", v["id"]).execute()
+                
+                res18 = supabase.table("viajes").select("*").eq("fecha", "2026-08-18").order("numero_viaje").execute()
+                viajes18 = [x["numero_viaje"] for x in res18.data] if res18.data else []
+                siguiente_num = max(viajes18, default=0) + 1
+                
+                supabase.table("viajes").insert({
+                    "fecha": "2026-08-18",
+                    "numero_viaje": siguiente_num,
+                    "monto": 0.0,
+                    "propina": monto_mover
+                }).execute()
+    except Exception:
+        pass
 
 corregir_ingreso_19_a_18()
 
 # Asegurar ingreso inicial del Domingo 16 de Agosto (C$ 310)
 def asegurar_domingo_16():
-    fecha_domingo = "2026-08-16"
-    res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
-    if not res_domingo.data:
-        supabase.table("viajes").insert({
-            "fecha": fecha_domingo,
-            "numero_viaje": 1,
-            "monto": 310.0,
-            "propina": 0.0
-        }).execute()
+    try:
+        fecha_domingo = "2026-08-16"
+        res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
+        if not res_domingo.data:
+            supabase.table("viajes").insert({
+                "fecha": fecha_domingo,
+                "numero_viaje": 1,
+                "monto": 310.0,
+                "propina": 0.0
+            }).execute()
+    except Exception:
+        pass
 
 asegurar_domingo_16()
 
@@ -107,65 +113,6 @@ def corregir_y_limpiar_fondos():
 
 corregir_y_limpiar_fondos()
 
-# Acumular aportes de días pasados automáticamente si no han sido procesados
-def actualizar_saldos_acumulados():
-    hoy = obtener_fecha_hoy()
-    res_acum = supabase.table("acumuladores").select("*").execute()
-    if not res_acum.data:
-        return
-        
-    for ac in res_acum.data:
-        id_fondo = ac["id"]
-        pct = float(ac["porcentaje"])
-        saldo_actual = float(ac.get("saldo", 0.0))
-        u_act_str = ac.get("ultima_actualizacion")
-        
-        if not u_act_str:
-            u_act = datetime.date(2026, 8, 16)
-        else:
-            try:
-                u_act = datetime.datetime.strptime(u_act_str, "%Y-%m-%d").date()
-            except ValueError:
-                u_act = datetime.date(2026, 8, 16)
-        
-        # Si la última actualización es anterior a hoy, procesamos días anteriores
-        if u_act < hoy:
-            ayer = hoy - datetime.timedelta(days=1)
-            nuevo_saldo = saldo_actual
-            
-            if u_act <= ayer:
-                res_v = supabase.table("viajes").select("fecha, monto, propina").gte("fecha", str(u_act)).lte("fecha", str(ayer)).execute()
-                res_g = supabase.table("gastos").select("fecha, monto").gte("fecha", str(u_act)).lte("fecha", str(ayer)).execute()
-                
-                df_v = pd.DataFrame(res_v.data) if res_v.data else pd.DataFrame()
-                df_g = pd.DataFrame(res_g.data) if res_g.data else pd.DataFrame()
-                
-                fecha_iter = u_act
-                while fecha_iter <= ayer:
-                    f_str = str(fecha_iter)
-                    ing = 0.0
-                    if not df_v.empty:
-                        sub_v = df_v[df_v["fecha"] == f_str]
-                        if not sub_v.empty:
-                            ing = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
-                    
-                    gas = 0.0
-                    if not df_g.empty:
-                        sub_g = df_g[df_g["fecha"] == f_str]
-                        if not sub_g.empty:
-                            gas = float(sub_g["monto"].astype(float).sum())
-                    
-                    gan_dia = max(0.0, ing - gas)
-                    nuevo_saldo += gan_dia * (pct / 100.0)
-                    fecha_iter += datetime.timedelta(days=1)
-            
-            supabase.table("acumuladores").update({
-                "saldo": nuevo_saldo,
-                "ultima_actualizacion": str(hoy)
-            }).eq("id", id_fondo).execute()
-
-actualizar_saldos_acumulados()
-
 # Rango Semanal: Inicia el Domingo
 def obtener_rango_semanal(fecha_ref):
     idx = (fecha_ref.weekday() + 1) % 7
@@ -179,10 +126,8 @@ def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     st.write(f"¿En verdad quieres retirar y poner el saldo del fondo **{fondo_nombre}** en C$ 0.00?")
     c_si, c_no = st.columns(2)
     if c_si.button("Sí, Retirar", key=f"yes_{fondo_id}"):
-        hoy_str = str(obtener_fecha_hoy())
         supabase.table("acumuladores").update({
-            "saldo": 0.00,
-            "ultima_actualizacion": hoy_str
+            "saldo": 0.00
         }).eq("id", fondo_id).execute()
         st.success(f"El fondo **{fondo_nombre}** se ha retirado y reiniciado a C$ 0.00")
         st.rerun()
