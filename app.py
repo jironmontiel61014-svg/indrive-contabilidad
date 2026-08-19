@@ -351,6 +351,9 @@ with tab3:
     col_h4.write("**Acción**")
     st.divider()
 
+    # Diccionario para guardar el total acumulado de cada fondo y usarlo en la calculadora
+    totales_acumulados_fondos = {}
+
     for f in fondos:
         col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
         pct = float(f["porcentaje"])
@@ -365,12 +368,43 @@ with tab3:
         # Total acumulado = Saldo previo + Aporte de hoy
         total_acumulado = saldo_base + aporte_hoy
         
+        # Guardar en diccionario para la calculadora
+        totales_acumulados_fondos[nombre_fondo] = total_acumulado
+        
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
         col_f2.write(f"C$ {aporte_hoy:.2f}")
         col_f3.write(f"**C$ {total_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
             confirmar_retirar_fondo(f["id"], nombre_fondo)
+
+    # --------------------------------------------------------------------------
+    # CALCULADORA DE SUMA DE FONDOS
+    # --------------------------------------------------------------------------
+    st.divider()
+    st.subheader("🧮 Calculadora De Suma De Fondos Acumulados")
+    st.caption("Selecciona los ítems o fondos que deseas sumar para conocer el total acumulado entre ellos.")
+
+    opciones_fondos = list(totales_acumulados_fondos.keys())
+    
+    fondos_seleccionados = st.multiselect(
+        "Selecciona los fondos a sumar:",
+        options=opciones_fondos,
+        default=[]
+    )
+
+    if fondos_seleccionados:
+        suma_total = sum(totales_acumulados_fondos[f] for f in fondos_seleccionados)
+        st.metric(
+            label=f"Suma Total de {len(fondos_seleccionados)} fondo(s) seleccionado(s)",
+            value=f"C$ {suma_total:.2f}"
+        )
+        
+        # Mostrar detalle de los seleccionados
+        detalle_str = " + ".join([f"{f} (C$ {totales_acumulados_fondos[f]:.2f})" for f in fondos_seleccionados])
+        st.caption(f"Desglose: {detalle_str}")
+    else:
+        st.info("Selecciona al menos un fondo arriba para ver la suma total.")
 
 # ------------------------------------------------------------------------------
 # PESTAÑA 4: REPORTES OPERATIVOS Y FINANCIEROS
