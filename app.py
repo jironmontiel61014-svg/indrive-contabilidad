@@ -26,7 +26,7 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Verificar y asegurar el ingreso inicial del Domingo 16 de Agosto (C$ 310)
+# Asegurar ingreso inicial del Domingo 16 de Agosto (C$ 310)
 def asegurar_domingo_16():
     fecha_domingo = "2026-08-16"
     res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
@@ -39,6 +39,32 @@ def asegurar_domingo_16():
         }).execute()
 
 asegurar_domingo_16()
+
+# Asegurar Saldos Iniciales Correctos en la tabla 'acumuladores'
+def asegurar_saldos_base():
+    saldos_objetivo = [
+        {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo_base": 133.50},
+        {"nombre": "Ayuda a Padres", "porcentaje": 5.0, "saldo_base": 133.50},
+        {"nombre": "Ahorro (5%)", "porcentaje": 5.0, "saldo_base": 133.50},
+        {"nombre": "Mantenimiento Moto (5%)", "porcentaje": 5.0, "saldo_base": 78.50},
+        {"nombre": "Cuota moto", "porcentaje": 20.0, "saldo_base": 0.00},
+        {"nombre": "Entretenimiento", "porcentaje": 10.0, "saldo_base": 0.00},
+        {"nombre": "Libre/Deuda", "porcentaje": 50.0, "saldo_base": 0.00},
+    ]
+    
+    res = supabase.table("acumuladores").select("*").execute()
+    fondos_existentes = {f["nombre"]: f for f in res.data} if res.data else {}
+
+    for item in saldos_objetivo:
+        nombre = item["nombre"]
+        if nombre not in fondos_existentes:
+            supabase.table("acumuladores").insert({
+                "nombre": nombre,
+                "porcentaje": item["porcentaje"],
+                "saldo": item["saldo_base"]
+            }).execute()
+
+asegurar_saldos_base()
 
 # Rango Semanal: Inicia el Domingo
 def obtener_rango_semanal(fecha_ref):
@@ -54,7 +80,6 @@ def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     c_si, c_no = st.columns(2)
     if c_si.button("Sí, Retirar", key=f"yes_{fondo_id}"):
         hoy_str = str(datetime.date.today())
-        # Reseteamos el saldo acumulado en Supabase a 0.00
         supabase.table("acumuladores").update({
             "saldo": 0.00,
             "ultima_actualizacion": hoy_str
@@ -237,7 +262,6 @@ with tab2:
         })
         fecha_iter += datetime.timedelta(days=1)
 
-    # Fila de Totales Generales
     dias_semana_lista.append({
         "Fecha": "TOTAL",
         "Ingresos (C$)": f"{total_ingresos_tabla:.0f}",
@@ -249,28 +273,27 @@ with tab2:
     st.table(df_dias_semana)
 
 # ------------------------------------------------------------------------------
-# PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS
+# PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS (LÓGICA DIARIA)
 # ------------------------------------------------------------------------------
 with tab3:
     st.header("💰 Distribución De Ganancias")
     
     hoy = datetime.date.today()
-    inicio_sem, fin_sem = obtener_rango_semanal(hoy)
 
-    # Obtenemos la Ganancia Neta de la semana actual
-    res_v_dist = supabase.table("viajes").select("monto, propina").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
-    df_v_dist = pd.DataFrame(res_v_dist.data) if res_v_dist.data else pd.DataFrame()
-    ing_semana_dist = float(df_v_dist["monto"].astype(float).sum() + df_v_dist["propina"].astype(float).sum()) if not df_v_dist.empty else 0.0
+    # 1. Obtenemos la Ganancia Neta de HOY únicamente
+    res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
+    df_v_h = pd.DataFrame(res_v_hoy.data) if res_v_hoy.data else pd.DataFrame()
+    ing_hoy = float(df_v_h["monto"].astype(float).sum() + df_v_h["propina"].astype(float).sum()) if not df_v_h.empty else 0.0
 
-    res_g_dist = supabase.table("gastos").select("monto").gte("fecha", str(inicio_sem)).lte("fecha", str(fin_sem)).execute()
-    df_g_dist = pd.DataFrame(res_g_dist.data) if res_g_dist.data else pd.DataFrame()
-    gas_semana_dist = float(df_g_dist["monto"].astype(float).sum()) if not df_g_dist.empty else 0.0
+    res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
+    df_g_h = pd.DataFrame(res_g_hoy.data) if res_g_hoy.data else pd.DataFrame()
+    gas_hoy = float(df_g_h["monto"].astype(float).sum()) if not df_g_h.empty else 0.0
 
-    ganancia_base_calculo = max(0.0, ing_semana_dist - gas_semana_dist)
+    ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
 
-    st.write(f"**Ganancia Neta Acumulada En La Semana Actual:** `C$ {ganancia_base_calculo:.2f}`")
+    st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
 
-    # Cargar fondos directamente desde Supabase
+    # 2. Cargar Fondos desde Supabase
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
     
@@ -278,7 +301,7 @@ with tab3:
     
     col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
     col_h1.write("**Fondo (% Porcentaje)**")
-    col_h2.write("**Aporte Semanal (C$)**")
+    col_h2.write("**Aporte Hoy (C$)**")
     col_h3.write("**Total Acumulado (C$)**")
     col_h4.write("**Acción**")
     st.divider()
@@ -288,17 +311,17 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # Leemos el saldo real desde Supabase (si fue retirado estará en 0.00)
-        saldo_base_db = float(f.get("saldo", 0.0))
+        # Saldo base previo guardado en Supabase
+        saldo_base = float(f.get("saldo", 0.0))
         
-        # Aporte calculado únicamente para la semana en curso
-        aporte_semanal = ganancia_base_calculo * (pct / 100.0)
+        # Aporte calculado únicamente para el día de hoy
+        aporte_hoy = ganancia_hoy * (pct / 100.0)
         
-        # Total acumulado real en pantalla
-        total_acumulado = saldo_base_db + aporte_semanal
+        # Total acumulado = Saldo previo acumulado + Aporte de hoy
+        total_acumulado = saldo_base + aporte_hoy
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
-        col_f2.write(f"C$ {aporte_semanal:.2f}")
+        col_f2.write(f"C$ {aporte_hoy:.2f}")
         col_f3.write(f"**C$ {total_acumulado:.2f}**")
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
