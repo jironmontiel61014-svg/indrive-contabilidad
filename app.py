@@ -6,6 +6,11 @@ import pandas as pd
 # Configuración de Página
 st.set_page_config(page_title="InDrive Contabilidad", page_icon="🏍️", layout="centered")
 
+# Obtener fecha de HOY en zona horaria Nicaragua (UTC-6)
+def obtener_fecha_hoy():
+    tz_nicaragua = datetime.timezone(datetime.timedelta(hours=-6))
+    return datetime.datetime.now(tz_nicaragua).date()
+
 MESES = {
     1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
     5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
@@ -26,6 +31,27 @@ def init_supabase():
 
 supabase = init_supabase()
 
+# Mover ingreso ingresado por error el 19/08/2026 al 18/08/2026 como propina
+def corregir_ingreso_19_a_18():
+    res19 = supabase.table("viajes").select("*").eq("fecha", "2026-08-19").execute()
+    if res19.data:
+        for v in res19.data:
+            monto_mover = float(v["monto"]) + float(v["propina"])
+            supabase.table("viajes").delete().eq("id", v["id"]).execute()
+            
+            res18 = supabase.table("viajes").select("*").eq("fecha", "2026-08-18").order("numero_viaje").execute()
+            viajes18 = [x["numero_viaje"] for x in res18.data] if res18.data else []
+            siguiente_num = max(viajes18, default=0) + 1
+            
+            supabase.table("viajes").insert({
+                "fecha": "2026-08-18",
+                "numero_viaje": siguiente_num,
+                "monto": 0.0,
+                "propina": monto_mover
+            }).execute()
+
+corregir_ingreso_19_a_18()
+
 # Asegurar ingreso inicial del Domingo 16 de Agosto (C$ 310)
 def asegurar_domingo_16():
     fecha_domingo = "2026-08-16"
@@ -40,13 +66,13 @@ def asegurar_domingo_16():
 
 asegurar_domingo_16()
 
-# Limpieza y estructuración correcta de fondos (Elimina duplicados de Supabase)
+# Limpieza y estructuración correcta de fondos (Nombres limpios)
 def corregir_y_limpiar_fondos():
     fondos_limpios = [
         {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo": 133.50},
         {"nombre": "Ayuda a Padres", "porcentaje": 5.0, "saldo": 133.50},
-        {"nombre": "Ahorro (5%)", "porcentaje": 5.0, "saldo": 133.50},
-        {"nombre": "Mantenimiento Moto (5%)", "porcentaje": 5.0, "saldo": 78.50},
+        {"nombre": "Ahorro", "porcentaje": 5.0, "saldo": 133.50},
+        {"nombre": "Mantenimiento Moto", "porcentaje": 5.0, "saldo": 78.50},
         {"nombre": "Cuota moto", "porcentaje": 20.0, "saldo": 0.00},
         {"nombre": "Entretenimiento", "porcentaje": 10.0, "saldo": 0.00},
         {"nombre": "Libre/Deuda", "porcentaje": 50.0, "saldo": 0.00},
@@ -54,8 +80,16 @@ def corregir_y_limpiar_fondos():
     
     res = supabase.table("acumuladores").select("*").execute()
     
-    # Si la tabla tiene duplicados (más de 7 registros) o está vacía, la reseteamos limpia
+    necesita_reset = False
     if not res.data or len(res.data) != 7:
+        necesita_reset = True
+    else:
+        for f in res.data:
+            if "%" in f["nombre"]:
+                necesita_reset = True
+                break
+
+    if necesita_reset:
         for f in res.data:
             supabase.table("acumuladores").delete().eq("id", f["id"]).execute()
             
@@ -77,7 +111,7 @@ def confirmar_retirar_fondo(fondo_id, fondo_nombre):
     st.write(f"¿En verdad quieres retirar y poner el saldo del fondo **{fondo_nombre}** en C$ 0.00?")
     c_si, c_no = st.columns(2)
     if c_si.button("Sí, Retirar", key=f"yes_{fondo_id}"):
-        hoy_str = str(datetime.date.today())
+        hoy_str = str(obtener_fecha_hoy())
         supabase.table("acumuladores").update({
             "saldo": 0.00,
             "ultima_actualizacion": hoy_str
@@ -102,7 +136,7 @@ tab1, tab2, tab3, tab4 = st.tabs([
 # ------------------------------------------------------------------------------
 with tab1:
     st.header("📝 Registro Diario De Operaciones")
-    fecha_seleccionada = st.date_input("Fecha De Registro", datetime.date.today())
+    fecha_seleccionada = st.date_input("Fecha De Registro", obtener_fecha_hoy())
     
     st.info("💡 Fondo De Caja Chica: **C$ 200.00** (Exclusivo Para Cambio A Pasajeros, No Genera Ingreso Ni Gasto).")
 
@@ -189,7 +223,7 @@ with tab1:
 with tab2:
     st.header("📊 Resumen Semanal De Operaciones")
     
-    hoy = datetime.date.today()
+    hoy = obtener_fecha_hoy()
     inicio_sem, fin_sem = obtener_rango_semanal(hoy)
     
     str_inicio = f"{inicio_sem.day} De {MESES[inicio_sem.month]}"
@@ -276,7 +310,7 @@ with tab2:
 with tab3:
     st.header("💰 Distribución De Ganancias")
     
-    hoy = datetime.date.today()
+    hoy = obtener_fecha_hoy()
 
     # 1. Ganancia Neta de HOY
     res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
@@ -334,16 +368,16 @@ with tab4:
     tipo_reporte = st.selectbox("Filtro De Reporte", ["Diario", "Semanal", "Mensual"])
     
     if tipo_reporte == "Diario":
-        f_rep = st.date_input("Seleccionar Día De Reporte", datetime.date.today())
+        f_rep = st.date_input("Seleccionar Día De Reporte", obtener_fecha_hoy())
         inicio_f, fin_f = f_rep, f_rep
     elif tipo_reporte == "Semanal":
-        f_ref = st.date_input("Seleccionar Fecha De La Semana", datetime.date.today())
+        f_ref = st.date_input("Seleccionar Fecha De La Semana", obtener_fecha_hoy())
         inicio_f, fin_f = obtener_rango_semanal(f_ref)
         st.caption(f"Rango Seleccionado: Del {inicio_f.strftime('%d/%m/%Y')} Al {fin_f.strftime('%d/%m/%Y')}")
     else:
-        mes_sel = st.selectbox("Seleccionar Mes", list(MESES.values()), index=datetime.date.today().month - 1)
+        mes_sel = st.selectbox("Seleccionar Mes", list(MESES.values()), index=obtener_fecha_hoy().month - 1)
         num_mes = list(MESES.keys())[list(MESES.values()).index(mes_sel)]
-        anio_sel = st.number_input("Año", min_value=2024, max_value=2030, value=datetime.date.today().year)
+        anio_sel = st.number_input("Año", min_value=2024, max_value=2030, value=obtener_fecha_hoy().year)
         inicio_f = datetime.date(anio_sel, num_mes, 1)
         if num_mes == 12:
             fin_f = datetime.date(anio_sel, 12, 31)
