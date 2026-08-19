@@ -17,17 +17,6 @@ DIAS_SEMANA = {
     4: "Viernes", 5: "Sábado", 6: "Domingo"
 }
 
-# SALDOS BASE INICIALES (Previsión previa)
-SALDOS_INICIALES = {
-    "Ofrenda a Dios": 99.00,
-    "Ayuda a Padres": 99.00,
-    "Ahorro": 99.00,
-    "Mantenimiento Moto": 44.00,
-    "Cuota Moto": 0.00,
-    "Entretenimiento": 0.00,
-    "Libre / Deudas": 0.00
-}
-
 # Conexión a Supabase
 @st.cache_resource
 def init_supabase():
@@ -58,62 +47,19 @@ def obtener_rango_semanal(fecha_ref):
     fin = inicio + datetime.timedelta(days=6)
     return inicio, fin
 
-# Calcular semanas pasadas acumuladas para un fondo específico en la tabla acumuladores
-def obtener_aportes_semanas_pasadas(porcentaje_fondo, fecha_ultima_reiniciacion, inicio_semana_actual):
-    res_v = supabase.table("viajes").select("fecha, monto, propina").gte("fecha", fecha_ultima_reiniciacion).lt("fecha", str(inicio_semana_actual)).execute()
-    res_g = supabase.table("gastos").select("fecha, monto").gte("fecha", fecha_ultima_reiniciacion).lt("fecha", str(inicio_semana_actual)).execute()
-    
-    df_v = pd.DataFrame(res_v.data) if res_v.data else pd.DataFrame()
-    df_g = pd.DataFrame(res_g.data) if res_g.data else pd.DataFrame()
-    
-    if df_v.empty and df_g.empty:
-        return 0.0
-
-    # Determinar rango global de fechas pasadas
-    fechas = []
-    if not df_v.empty: fechas.extend(df_v["fecha"].tolist())
-    if not df_g.empty: fechas.extend(df_g["fecha"].tolist())
-    
-    min_f = min(fechas)
-    f_iter, _ = obtener_rango_semanal(datetime.date.fromisoformat(min_f))
-    
-    total_acumulado_pasado = 0.0
-    
-    while f_iter < inicio_semana_actual:
-        f_fin_sem = f_iter + datetime.timedelta(days=6)
-        
-        ing_sem = 0.0
-        if not df_v.empty:
-            sub_v = df_v[(df_v["fecha"] >= str(f_iter)) & (df_v["fecha"] <= str(f_fin_sem))]
-            if not sub_v.empty:
-                ing_sem = float(sub_v["monto"].astype(float).sum() + sub_v["propina"].astype(float).sum())
-                
-        gas_sem = 0.0
-        if not df_g.empty:
-            sub_g = df_g[(df_g["fecha"] >= str(f_iter)) & (df_g["fecha"] <= str(f_fin_sem))]
-            if not sub_g.empty:
-                gas_sem = float(sub_g["monto"].astype(float).sum())
-                
-        ganancia_sem = max(0.0, ing_sem - gas_sem)
-        total_acumulado_pasado += ganancia_sem * (porcentaje_fondo / 100.0)
-        
-        f_iter += datetime.timedelta(days=7)
-        
-    return total_acumulado_pasado
-
 # Diálogo de Confirmación para Retirar Fondo Individual
 @st.dialog("Confirmar Retiro de Fondo")
 def confirmar_retirar_fondo(fondo_id, fondo_nombre):
-    st.write(f"¿En verdad quieres retirar y poner el acumulado del fondo **{fondo_nombre}** en C$ 0.00?")
+    st.write(f"¿En verdad quieres retirar y poner el saldo del fondo **{fondo_nombre}** en C$ 0.00?")
     c_si, c_no = st.columns(2)
     if c_si.button("Sí, Retirar", key=f"yes_{fondo_id}"):
         hoy_str = str(datetime.date.today())
-        # Actualizamos la fecha de reinicio para que comience a contar desde hoy
+        # Reseteamos el saldo acumulado en Supabase a 0.00
         supabase.table("acumuladores").update({
             "saldo": 0.00,
             "ultima_actualizacion": hoy_str
         }).eq("id", fondo_id).execute()
-        st.success(f"El fondo **{fondo_nombre}** ha sido retirado y reiniciado a C$ 0.00")
+        st.success(f"El fondo **{fondo_nombre}** se ha retirado y reiniciado a C$ 0.00")
         st.rerun()
     if c_no.button("No, Cancelar", key=f"no_{fondo_id}"):
         st.rerun()
@@ -322,12 +268,13 @@ with tab3:
 
     ganancia_base_calculo = max(0.0, ing_semana_dist - gas_semana_dist)
 
-    st.write(f"**Ganancia Neta En La Semana Actual:** `C$ {ganancia_base_calculo:.2f}`")
+    st.write(f"**Ganancia Neta Acumulada En La Semana Actual:** `C$ {ganancia_base_calculo:.2f}`")
 
+    # Cargar fondos directamente desde Supabase
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data
     
-    st.subheader("Tabla De Distribución Y Acumulado De Fondos")
+    st.subheader("Tabla De Distribución De Fondos")
     
     col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
     col_h1.write("**Fondo (% Porcentaje)**")
@@ -341,18 +288,14 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # 1. Base inicial estática previa
-        base_inicial_previa = SALDOS_INICIALES.get(nombre_fondo, 0.0)
+        # Leemos el saldo real desde Supabase (si fue retirado estará en 0.00)
+        saldo_base_db = float(f.get("saldo", 0.0))
         
-        # 2. Aporte de la semana actual
+        # Aporte calculado únicamente para la semana en curso
         aporte_semanal = ganancia_base_calculo * (pct / 100.0)
         
-        # 3. Aportes de semanas pasadas cerradas desde el último retiro
-        fecha_ultima_reiniciacion = f.get("ultima_actualizacion") or "2026-08-16"
-        aportes_semanas_pasadas = obtener_aportes_semanas_pasadas(pct, fecha_ultima_reiniciacion, inicio_sem)
-        
-        # 4. Total Acumulado Real
-        total_acumulado = base_inicial_previa + aportes_semanas_pasadas + aporte_semanal
+        # Total acumulado real en pantalla
+        total_acumulado = saldo_base_db + aporte_semanal
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
         col_f2.write(f"C$ {aporte_semanal:.2f}")
