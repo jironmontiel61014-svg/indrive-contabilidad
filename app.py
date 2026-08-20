@@ -40,79 +40,6 @@ def init_supabase():
 
 supabase = init_supabase()
 
-# Mover ingreso ingresado por error el 19/08/2026 al 18/08/2026 como propina
-def corregir_ingreso_19_a_18():
-    try:
-        res19 = supabase.table("viajes").select("*").eq("fecha", "2026-08-19").execute()
-        if res19.data:
-            for v in res19.data:
-                monto_mover = float(v["monto"]) + float(v["propina"])
-                supabase.table("viajes").delete().eq("id", v["id"]).execute()
-                
-                res18 = supabase.table("viajes").select("*").eq("fecha", "2026-08-18").order("numero_viaje").execute()
-                viajes18 = [x["numero_viaje"] for x in res18.data] if res18.data else []
-                siguiente_num = max(viajes18, default=0) + 1
-                
-                supabase.table("viajes").insert({
-                    "fecha": "2026-08-18",
-                    "numero_viaje": siguiente_num,
-                    "monto": 0.0,
-                    "propina": monto_mover
-                }).execute()
-    except Exception:
-        pass
-
-corregir_ingreso_19_a_18()
-
-# Asegurar ingreso inicial del Domingo 16 de Agosto (C$ 310)
-def asegurar_domingo_16():
-    try:
-        fecha_domingo = "2026-08-16"
-        res_domingo = supabase.table("viajes").select("*").eq("fecha", fecha_domingo).execute()
-        if not res_domingo.data:
-            supabase.table("viajes").insert({
-                "fecha": fecha_domingo,
-                "numero_viaje": 1,
-                "monto": 310.0,
-                "propina": 0.0
-            }).execute()
-    except Exception:
-        pass
-
-asegurar_domingo_16()
-
-# Limpieza y estructuración correcta de fondos
-def corregir_y_limpiar_fondos():
-    fondos_limpios = [
-        {"nombre": "Ofrenda a Dios", "porcentaje": 5.0, "saldo": 133.50},
-        {"nombre": "Ayuda a Padres", "porcentaje": 5.0, "saldo": 133.50},
-        {"nombre": "Ahorro", "porcentaje": 5.0, "saldo": 133.50},
-        {"nombre": "Mantenimiento Moto", "porcentaje": 5.0, "saldo": 78.50},
-        {"nombre": "Cuota moto", "porcentaje": 20.0, "saldo": 0.00},
-        {"nombre": "Entretenimiento", "porcentaje": 10.0, "saldo": 0.00},
-        {"nombre": "Libre/Deuda", "porcentaje": 50.0, "saldo": 0.00},
-    ]
-    
-    res = supabase.table("acumuladores").select("*").execute()
-    
-    necesita_reset = False
-    if not res.data or len(res.data) != 7:
-        necesita_reset = True
-    else:
-        for f in res.data:
-            if "%" in f["nombre"]:
-                necesita_reset = True
-                break
-
-    if necesita_reset:
-        for f in res.data:
-            supabase.table("acumuladores").delete().eq("id", f["id"]).execute()
-            
-        for item in fondos_limpios:
-            supabase.table("acumuladores").insert(item).execute()
-
-corregir_y_limpiar_fondos()
-
 # Rango Semanal: Inicia el Domingo
 def obtener_rango_semanal(fecha_ref):
     idx = (fecha_ref.weekday() + 1) % 7
@@ -338,9 +265,9 @@ with tab3:
 
     st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
 
-    # 2. Cargar Fondos limpios desde Supabase
+    # 2. Cargar Fondos desde Supabase
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
-    fondos = res_fondos.data
+    fondos = res_fondos.data if res_fondos.data else []
     
     st.subheader("Tabla De Distribución De Fondos")
     
@@ -351,7 +278,6 @@ with tab3:
     col_h4.write("**Acción**")
     st.divider()
 
-    # Diccionario para guardar el total acumulado de cada fondo y usarlo en la calculadora
     totales_acumulados_fondos = {}
 
     for f in fondos:
@@ -359,16 +285,10 @@ with tab3:
         pct = float(f["porcentaje"])
         nombre_fondo = f["nombre"]
         
-        # Saldo base previo acumulado
         saldo_base = float(f.get("saldo", 0.0))
-        
-        # Aporte únicamente del día de hoy
         aporte_hoy = ganancia_hoy * (pct / 100.0)
-        
-        # Total acumulado = Saldo previo + Aporte de hoy
         total_acumulado = saldo_base + aporte_hoy
         
-        # Guardar en diccionario para la calculadora
         totales_acumulados_fondos[nombre_fondo] = total_acumulado
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
@@ -400,7 +320,6 @@ with tab3:
             value=f"C$ {suma_total:.2f}"
         )
         
-        # Mostrar detalle de los seleccionados
         detalle_str = " + ".join([f"{f} (C$ {totales_acumulados_fondos[f]:.2f})" for f in fondos_seleccionados])
         st.caption(f"Desglose: {detalle_str}")
     else:
