@@ -123,7 +123,7 @@ with tab1:
                 st.rerun()
 
     st.divider()
-    st.subheader(f"Detalle De Hoy ({fecha_seleccionada.strftime('%d/%m/%Y')})")
+    st.subheader(f"Detalle Del Día ({fecha_seleccionada.strftime('%d/%m/%Y')})")
     
     col_v, col_g = st.columns(2)
     with col_v:
@@ -140,7 +140,7 @@ with tab1:
             st.markdown(f"**Total Viajes Realizados:** `{len(df_v_hoy)}`")
             st.markdown(f"**Total Ingresado Hoy:** `C$ {total_colectado_dia:.2f}`")
         else:
-            st.caption("No Hay Viajes Registrados Hoy.")
+            st.caption("No hay viajes registrados para este día.")
             
     with col_g:
         st.write("**Gastos Del Día**")
@@ -155,7 +155,7 @@ with tab1:
             total_gastos_dia = df_g_hoy["Monto (C$)"].sum()
             st.markdown(f"**Total Gastos Hoy:** `C$ {total_gastos_dia:.2f}`")
         else:
-            st.caption("No Hay Gastos Registrados Hoy.")
+            st.caption("No hay gastos registrados para este día.")
 
 # ------------------------------------------------------------------------------
 # PESTAÑA 2: RESUMEN SEMANAL
@@ -245,36 +245,21 @@ with tab2:
     st.table(df_dias_semana)
 
 # ------------------------------------------------------------------------------
-# PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS (LÓGICA DIARIA)
+# PESTAÑA 3: DISTRIBUCIÓN DE GANANCIAS
 # ------------------------------------------------------------------------------
 with tab3:
     st.header("💰 Distribución De Ganancias")
     
-    hoy = obtener_fecha_hoy()
-
-    # 1. Ganancia Neta de HOY
-    res_v_hoy = supabase.table("viajes").select("monto, propina").eq("fecha", str(hoy)).execute()
-    df_v_h = pd.DataFrame(res_v_hoy.data) if res_v_hoy.data else pd.DataFrame()
-    ing_hoy = float(df_v_h["monto"].astype(float).sum() + df_v_h["propina"].astype(float).sum()) if not df_v_h.empty else 0.0
-
-    res_g_hoy = supabase.table("gastos").select("monto").eq("fecha", str(hoy)).execute()
-    df_g_h = pd.DataFrame(res_g_hoy.data) if res_g_hoy.data else pd.DataFrame()
-    gas_hoy = float(df_g_h["monto"].astype(float).sum()) if not df_g_h.empty else 0.0
-
-    ganancia_hoy = max(0.0, ing_hoy - gas_hoy)
-
-    st.write(f"**Ganancia Neta De Hoy ({hoy.strftime('%d/%m/%Y')}):** `C$ {ganancia_hoy:.2f}`")
-
-    # 2. Cargar Fondos desde Supabase
+    # Cargar Fondos directamente de Supabase
     res_fondos = supabase.table("acumuladores").select("*").order("id").execute()
     fondos = res_fondos.data if res_fondos.data else []
     
-    st.subheader("Tabla De Distribución De Fondos")
+    st.subheader("Tabla De Saldos Acumulados")
     
     col_h1, col_h2, col_h3, col_h4 = st.columns([3, 2, 2, 2])
     col_h1.write("**Fondo (% Porcentaje)**")
-    col_h2.write("**Aporte Hoy (C$)**")
-    col_h3.write("**Total Acumulado (C$)**")
+    col_h2.write("**Saldo Acumulado (C$)**")
+    col_h3.write("**Ajustar Saldo**")
     col_h4.write("**Acción**")
     st.divider()
 
@@ -282,18 +267,22 @@ with tab3:
 
     for f in fondos:
         col_f1, col_f2, col_f3, col_f4 = st.columns([3, 2, 2, 2])
-        pct = float(f["porcentaje"])
+        pct = float(f.get("porcentaje", 0.0))
         nombre_fondo = f["nombre"]
+        saldo_actual = float(f.get("saldo", 0.0))
         
-        saldo_base = float(f.get("saldo", 0.0))
-        aporte_hoy = ganancia_hoy * (pct / 100.0)
-        total_acumulado = saldo_base + aporte_hoy
-        
-        totales_acumulados_fondos[nombre_fondo] = total_acumulado
+        totales_acumulados_fondos[nombre_fondo] = saldo_actual
         
         col_f1.write(f"**{nombre_fondo}** ({pct:.0f}%)")
-        col_f2.write(f"C$ {aporte_hoy:.2f}")
-        col_f3.write(f"**C$ {total_acumulado:.2f}**")
+        col_f2.write(f"**C$ {saldo_actual:.2f}**")
+        
+        # Permitir editar el saldo directamente en la app si fuese necesario
+        nuevo_saldo = col_f3.number_input(f"Editar", value=saldo_actual, key=f"edit_{f['id']}", label_visibility="collapsed", step=10.0)
+        if nuevo_saldo != saldo_actual:
+            if col_f3.button("Guardar", key=f"btn_save_{f['id']}"):
+                supabase.table("acumuladores").update({"saldo": nuevo_saldo}).eq("id", f["id"]).execute()
+                st.success("Saldo actualizado.")
+                st.rerun()
         
         if col_f4.button("Retirar", key=f"btn_retirar_{f['id']}"):
             confirmar_retirar_fondo(f["id"], nombre_fondo)
